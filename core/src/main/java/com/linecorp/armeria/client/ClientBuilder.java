@@ -17,6 +17,7 @@ package com.linecorp.armeria.client;
 
 import static java.util.Objects.requireNonNull;
 
+import java.lang.invoke.SerializedLambda;
 import java.net.URI;
 
 import javax.annotation.Nullable;
@@ -58,11 +59,16 @@ public final class ClientBuilder extends AbstractClientOptionsBuilder<ClientBuil
     @Nullable
     private final URI uri;
     @Nullable
-    private final Scheme scheme;
-    @Nullable
     private final Endpoint endpoint;
     @Nullable
-    private final String path;
+    private final Scheme scheme;
+    @Nullable
+    private final SessionProtocol protocol;
+    @Nullable
+    private String path;
+
+    private SerializationFormat format = SerializationFormat.NONE;
+
     private ClientFactory factory = ClientFactory.DEFAULT;
 
     /**
@@ -81,76 +87,28 @@ public final class ClientBuilder extends AbstractClientOptionsBuilder<ClientBuil
 
     /**
      * Creates a new {@link ClientBuilder} that builds the client that connects to the specified
-     * {@link Endpoint} with the {@link SessionProtocol} and the {@link SerializationFormat}.
-     */
-    public ClientBuilder(SessionProtocol protocol, SerializationFormat format, Endpoint endpoint) {
-        this(Scheme.of(format, protocol), requireNonNull(endpoint, "endpoint"));
-    }
-
-    /**
-     * Creates a new {@link ClientBuilder} that builds the HTTP client that connects to the specified
-     * {@link Endpoint} with the {@link SessionProtocol}.
-     */
-    public ClientBuilder(SessionProtocol protocol, Endpoint endpoint) {
-        this(requireNonNull(protocol, "protocol"), SerializationFormat.NONE,
-             requireNonNull(endpoint, "endpoint"));
-    }
-
-    /**
-     * Creates a new {@link ClientBuilder} that builds the client that connects to the specified
      * {@link Endpoint} with the {@code Scheme}.
      */
     public ClientBuilder(String scheme, Endpoint endpoint) {
         this(Scheme.parse(scheme), requireNonNull(endpoint, "endpoint"));
     }
 
-    /**
-     * Creates a new {@link ClientBuilder} that builds the client that connects to the specified
-     * {@link Endpoint} with the {@link Scheme}.
-     */
     public ClientBuilder(Scheme scheme, Endpoint endpoint) {
-        this(null, requireNonNull(scheme, "scheme"), requireNonNull(endpoint, "endpoint"), "");
+        this(null, requireNonNull(scheme, "scheme"), null, requireNonNull(endpoint, "endpoint"));
     }
 
-    /**
-     * Creates a new {@link ClientBuilder} that builds the client that connects to the specified
-     * {@link Endpoint} with the {@link SessionProtocol}, {@link SerializationFormat}, and {@code path}.
-     */
-    public ClientBuilder(SessionProtocol protocol, SerializationFormat format, Endpoint endpoint, String path) {
-        this(Scheme.of(format, protocol), requireNonNull(endpoint, "endpoint"), requireNonNull(path, "path"));
+    public ClientBuilder(SessionProtocol protocol, Endpoint endpoint) {
+        this(null, null, requireNonNull(protocol, "sessionProtocol"), requireNonNull(endpoint, "endpoint"));
     }
 
-    /**
-     * Creates a new {@link ClientBuilder} that builds the HTTP client that connects to the specified
-     * {@link Endpoint} with the {@link SessionProtocol} and {@code path}.
-     */
-    public ClientBuilder(SessionProtocol protocol, Endpoint endpoint, String path) {
-        this(requireNonNull(protocol, "protocol"), SerializationFormat.NONE,
-             requireNonNull(endpoint, "endpoint"), requireNonNull(path, "path"));
-    }
-
-    /**
-     * Creates a new {@link ClientBuilder} that builds the client that connects to the specified
-     * {@link Endpoint} with the {@code scheme} and {@code path}.
-     */
-    public ClientBuilder(String scheme, Endpoint endpoint, String path) {
-        this(Scheme.parse(scheme), requireNonNull(endpoint, "endpoint"), requireNonNull(path, "path"));
-    }
-
-    /**
-     * Creates a new {@link ClientBuilder} that builds the client that connects to the specified
-     * {@link Endpoint} with the {@link Scheme} and {@code path}.
-     */
-    public ClientBuilder(Scheme scheme, Endpoint endpoint, String path) {
-        this(null, requireNonNull(scheme, "scheme"), requireNonNull(endpoint, "endpoint"),
-             requireNonNull(path, "path"));
-    }
-
-    private ClientBuilder(URI uri, Scheme scheme, Endpoint endpoint, String path) {
+    private ClientBuilder(@Nullable URI uri, @Nullable Scheme scheme, @Nullable SessionProtocol protocol,
+                          @Nullable Endpoint endpoint) {
         this.uri = uri;
         this.scheme = scheme;
+        this.protocol = protocol;
         this.endpoint = endpoint;
-        this.path = path;
+
+        checkArguments();
     }
 
     /**
@@ -158,6 +116,29 @@ public final class ClientBuilder extends AbstractClientOptionsBuilder<ClientBuil
      */
     public ClientBuilder factory(ClientFactory factory) {
         this.factory = requireNonNull(factory, "factory");
+        return this;
+    }
+
+    /**
+     * Sets the {@code path} of the client.
+     */
+    public ClientBuilder path(String path) {
+        ensureEndpoint();
+
+        this.path = requireNonNull(path, "path");
+        return this;
+    }
+
+    /**
+     * Sets the {@link SerializationFormat} of the client. The default is {@link SerializationFormat#NONE}.
+     */
+    public ClientBuilder serializationFormat(SerializationFormat format) {
+        ensureEndpoint();
+        if (scheme != null) {
+            throw new IllegalStateException("scheme is already given");
+        }
+
+        this.format = requireNonNull(format, "serializationFormat");
         return this;
     }
 
@@ -171,11 +152,38 @@ public final class ClientBuilder extends AbstractClientOptionsBuilder<ClientBuil
      */
     public <T> T build(Class<T> clientType) {
         requireNonNull(clientType, "clientType");
+        checkArguments();
 
         if (uri != null) {
             return factory.newClient(uri, clientType, buildOptions());
+        } else if (path != null) {
+            return factory.newClient(scheme(), endpoint, path, clientType, buildOptions());
         } else {
-            return factory.newClient(scheme, endpoint, path, clientType, buildOptions());
+            return factory.newClient(scheme(), endpoint, clientType, buildOptions());
+        }
+    }
+
+    private Scheme scheme() {
+        return scheme == null ? Scheme.of(format, requireNonNull(protocol)) : scheme;
+    }
+
+    private void checkArguments() {
+        if (uri != null) {
+            return;
+        }
+
+        if (endpoint == null) {
+            throw new IllegalStateException("Both uri and endpoint are not given");
+        }
+
+        if (scheme == null && protocol == null) {
+            throw new IllegalStateException("Both scheme and protocol are not given");
+        }
+    }
+
+    private void ensureEndpoint() {
+        if (endpoint == null) {
+            throw new IllegalStateException("endpoint is not given");
         }
     }
 }
